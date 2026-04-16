@@ -1,4 +1,4 @@
-name: 🚀 Deploy cloud-mail to Cloudflare Workers
+﻿name: 🚀 Deploy cloud-mail to Cloudflare Workers
 
 on:
   push:
@@ -69,7 +69,15 @@ jobs:
             exit 1
           fi
           
-          if ! jq -e 'type == "array"' <<< "$DOMAIN" ; then
+          DOMAIN_NORMALIZED="$DOMAIN"
+          if ! jq -e 'type == "array"' <<< "$DOMAIN_NORMALIZED" >/dev/null 2>&1; then
+            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED#[}"
+            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED%]}"
+            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED//\"/}"
+            DOMAIN_NORMALIZED="[\"${DOMAIN_NORMALIZED}\"]"
+          fi
+
+          if ! jq -e 'type == "array"' <<< "$DOMAIN_NORMALIZED" >/dev/null 2>&1; then
             echo "❌ DOMAIN variable must be a JSON array (e.g., [\"example.com\"])."
             exit 1
           fi
@@ -113,7 +121,7 @@ jobs:
 
           sed -i "s|\${NAME}|${NAME}|g" "$CONFIG_FILE"
           sed -i "s|\${CUSTOM_DOMAIN}|${CUSTOM_DOMAIN}|g" "$CONFIG_FILE"
-          sed -i "s|\"\${DOMAIN}\"|${DOMAIN}|g" "$CONFIG_FILE"
+          sed -i "s|\"\${DOMAIN}\"|${DOMAIN_NORMALIZED}|g" "$CONFIG_FILE"
           sed -i "s|\${ADMIN}|${ADMIN}|g" "$CONFIG_FILE"
           sed -i "s|\${JWT_SECRET}|${JWT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" "$CONFIG_FILE"
@@ -255,3 +263,4 @@ jobs:
         with:
           retain_days: '1'
           keep_minimum_runs: '0'
+
