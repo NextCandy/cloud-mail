@@ -118,6 +118,9 @@ jobs:
             sed -i '/\[\[routes\]\]/,/^$/d' "$CONFIG_FILE"
           fi
 
+          # Free-plan accounts can hit the cron trigger cap before first deploy.
+          sed -i '/^\[triggers\]/,/^$/d' "$CONFIG_FILE"
+
           sed -i "s|\${NAME}|${NAME}|g" "$CONFIG_FILE"
           sed -i "s|\${CUSTOM_DOMAIN}|${CUSTOM_DOMAIN}|g" "$CONFIG_FILE"
           sed -i "s|\"\${DOMAIN}\"|${DOMAIN_ESCAPED}|g" "$CONFIG_FILE"
