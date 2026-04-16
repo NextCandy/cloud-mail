@@ -69,18 +69,17 @@ jobs:
             exit 1
           fi
           
-          DOMAIN_NORMALIZED="$DOMAIN"
-          if ! jq -e 'type == "array"' <<< "$DOMAIN_NORMALIZED" >/dev/null 2>&1; then
-            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED#[}"
-            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED%]}"
-            DOMAIN_NORMALIZED="${DOMAIN_NORMALIZED//\"/}"
-            DOMAIN_NORMALIZED="[\"${DOMAIN_NORMALIZED}\"]"
+          DOMAIN_NORMALIZED=$(jq -cn --arg domain "$CUSTOM_DOMAIN" '[$domain]')
+          if jq -e 'type == "array"' <<< "$DOMAIN" >/dev/null 2>&1; then
+            DOMAIN_NORMALIZED="$DOMAIN"
           fi
 
           if ! jq -e 'type == "array"' <<< "$DOMAIN_NORMALIZED" >/dev/null 2>&1; then
             echo "❌ DOMAIN variable must be a JSON array (e.g., [\"example.com\"])."
             exit 1
           fi
+
+          DOMAIN_ESCAPED=$(printf '%s' "$DOMAIN_NORMALIZED" | sed 's/[&|]/\\&/g')
           
           if [ -z "$ADMIN" ]; then
             echo "❌ ADMIN variable cannot be empty."
@@ -121,7 +120,7 @@ jobs:
 
           sed -i "s|\${NAME}|${NAME}|g" "$CONFIG_FILE"
           sed -i "s|\${CUSTOM_DOMAIN}|${CUSTOM_DOMAIN}|g" "$CONFIG_FILE"
-          sed -i "s|\"\${DOMAIN}\"|${DOMAIN_NORMALIZED}|g" "$CONFIG_FILE"
+          sed -i "s|\"\${DOMAIN}\"|${DOMAIN_ESCAPED}|g" "$CONFIG_FILE"
           sed -i "s|\${ADMIN}|${ADMIN}|g" "$CONFIG_FILE"
           sed -i "s|\${JWT_SECRET}|${JWT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" "$CONFIG_FILE"
