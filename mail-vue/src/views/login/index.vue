@@ -1,11 +1,7 @@
 <template>
   <div id="login-box" :style=" background ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" element-loading-text="登录中...">
     <div id="background-wrap" v-if="!settingStore.settings.background">
-      <div class="x1 cloud"></div>
-      <div class="x2 cloud"></div>
-      <div class="x3 cloud"></div>
-      <div class="x4 cloud"></div>
-      <div class="x5 cloud"></div>
+      <div v-for="(c, i) in clouds" :key="i" class="cloud" :style="c"></div>
       <div class="suffix-drift" aria-hidden="true">
         <span
             v-for="item in suffixDrifts"
@@ -234,6 +230,24 @@ const domainList = settingStore.domainList;
 // 只影响"谁在哪条轨道、整体从什么时刻开始"，不影响轨道内的等间隔，
 // 因此不重叠的保证依然成立。
 const driftSeed = Math.floor(Math.random() * 233280)
+
+// 背景云。原本是 5 朵写死的 div，靠文档流上下排开，想加密就会往视口外堆，
+// 所以改成绝对定位后按参数生成：数量、大小、速度、高度都在这里调。
+const clouds = (() => {
+  const COUNT = 16
+  const BAND = 88 / COUNT          // 每朵云在自己这一层里随机取高度，避免挤成一堆
+  return Array.from({length: COUNT}, (_, i) => {
+    // 大小拉开到 7 倍极差，远近层次才明显；小的多、大的少，符合天上的样子
+    const scale = 0.16 + Math.pow(Math.random(), 1.5) * 1.04   // 0.16 ~ 1.20
+    const duration = 13 + Math.random() * 25      // 13 ~ 38 秒
+    return {
+      top: (i * BAND + Math.random() * BAND).toFixed(2) + '%',
+      transform: `scale(${scale.toFixed(3)})`,
+      animationDuration: duration.toFixed(1) + 's',
+      animationDelay: (-Math.random() * duration).toFixed(1) + 's'
+    }
+  })
+})()
 
 const domainTotal = computed(() => (settingStore.domainList || []).length)
 
@@ -1063,38 +1077,18 @@ function submitRegister() {
   }
 }
 
-.x1 {
-  animation: animateCloud 30s linear infinite;
-  transform: scale(0.65);
-}
-
-.x2 {
-  animation: animateCloud 15s linear infinite;
-  transform: scale(0.3);
-}
-
-.x3 {
-  animation: animateCloud 25s linear infinite;
-  transform: scale(0.5);
-}
-
-.x4 {
-  animation: animateCloud 13s linear infinite;
-  transform: scale(0.4);
-}
-
-.x5 {
-  animation: animateCloud 20s linear infinite;
-  transform: scale(0.55);
-}
-
 .cloud {
   background: linear-gradient(to bottom, #fff 5%, #f1f1f1 100%);
   border-radius: 100px;
   box-shadow: 0 8px 5px rgba(0, 0, 0, 0.1);
   height: 120px;
   width: 350px;
-  position: relative;
+  position: absolute;
+  left: 0;
+  transform-origin: left center;
+  animation-name: animateCloud;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
 .cloud:after,
