@@ -122,6 +122,7 @@ const zh = {
     bounced: '发送失败',
     attachments: '附件列表',
     attCount: '共 {total} 个',
+    domainCount: '{total} 个邮箱后缀',
     emailCount: '共 {total} 封',
     error404: '404错误, 找不到页面',
     home: '返回首页',

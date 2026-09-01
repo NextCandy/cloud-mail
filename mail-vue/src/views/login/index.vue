@@ -16,6 +16,7 @@
       </div>
     </div>
     <div v-else :style="background"></div>
+    <div class="domain-count" v-if="domainTotal">{{ $t('domainCount', { total: domainTotal }) }}</div>
     <div class="form-wrapper">
       <div class="container">
         <span class="form-title">{{ settingStore.settings.title }}</span>
@@ -229,6 +230,14 @@ const registerForm = reactive({
 const domainList = settingStore.domainList;
 
 // 邮箱后缀像云一样飘过：环境变量里配置多少个域名，这里就渲染多少个
+// 每次进入页面换一副排布，避免刷新后看到完全相同的队形。
+// 只影响"谁在哪条轨道、整体从什么时刻开始"，不影响轨道内的等间隔，
+// 因此不重叠的保证依然成立。
+const driftSeed = Math.floor(Math.random() * 233280)
+const driftShift = Math.random()
+
+const domainTotal = computed(() => (settingStore.domainList || []).length)
+
 const suffixDrifts = computed(() => {
   const list = settingStore.domainList || []
   const total = list.length
@@ -248,12 +257,14 @@ const suffixDrifts = computed(() => {
   const base = CROSS / rate.ratio
   // 打乱"域名顺序"与"屏幕位置"的对应关系。若直接用下标决定轨道，
   // 配置里相邻的域名会依次落在相邻轨道上，飘起来像一份斜着排列的列表。
-  // 用固定种子的洗牌，保证同一份域名列表每次刷新的布局都一致。
+  let rndState = driftSeed
+  const rand = () => {
+    rndState = (rndState * 9301 + 49297) % 233280
+    return rndState / 233280
+  }
   const seat = [...Array(total).keys()]
-  let seed = total * 9301 + 49297
   for (let k = total - 1; k > 0; k--) {
-    seed = (seed * 9301 + 49297) % 233280
-    const j = Math.floor((seed / 233280) * (k + 1))
+    const j = Math.floor(rand() * (k + 1))
     const t = seat[k]; seat[k] = seat[j]; seat[j] = t
   }
   // 同一条轨道上的后缀等间隔入场。域名长短差得很多
@@ -262,22 +273,25 @@ const suffixDrifts = computed(() => {
   const laneOf = i => seat[i] % lanes
   const members = Array.from({length: lanes}, () => [])
   for (let i = 0; i < total; i++) members[laneOf(i)].push(i)
+  // 速度按轨道随机。同一条轨道必须同速——速度不同就会互相追赶，
+  // 轨道内等间隔的保证会失效。0.78~1.35 对应横穿屏幕约 16~27 秒，
+  // 与云的节奏同一区间，不会过快或过慢。
+  const laneSpeed = Array.from({length: lanes}, () => 0.78 + rand() * 0.57)
   const phase = new Array(total)
   members.forEach((group, lane) => {
     group.forEach((idx, k) => {
       // 轨道内均分周期，再整条轨道按黄金比例偏移，避免各轨道同时入场
-      phase[idx] = ((k / group.length) + lane * 0.6180339887) % 1
+      phase[idx] = ((k / group.length) + lane * 0.6180339887 + driftShift) % 1
     })
   })
   const TOP_FROM = 3, TOP_TO = 73   // 只在天空的蓝色区域飘，最底部渐变成白色会看不清
   const gap = lanes > 1 ? (TOP_TO - TOP_FROM) / (lanes - 1) : 0
-  const SIZE = [0.94, 1.02, 1.10]
-  const FADE = [0.88, 0.95, 1]
+  // 每个后缀单独随机大小；越大的看起来越近，透明度也越实
+  const sizeOf = list.map(() => 0.88 + rand() * 0.24)
   return list.map((text, i) => {
     const lane = laneOf(i)        // 轨道由洗牌决定，与域名在配置里的次序无关
-    const depth = lane % 3
-    // 相邻轨道给出明显速度差，让它们持续相对错开，不会长时间并排飘
-    const duration = Math.round(base * (1 + ((lane * 7) % 5) * 0.08))
+    const size = sizeOf[i]
+    const duration = Math.round(base * laneSpeed[lane])
     const delay = -phase[i] * duration
     return {
       text,
@@ -286,8 +300,8 @@ const suffixDrifts = computed(() => {
         top: (TOP_FROM + lane * gap).toFixed(2) + '%',
         animationDuration: duration + 's',
         animationDelay: delay.toFixed(2) + 's',
-        fontSize: SIZE[depth] + 'em',
-        opacity: FADE[depth]
+        fontSize: size.toFixed(3) + 'em',
+        opacity: (0.9 + (size - 0.88) / 0.24 * 0.1).toFixed(2)
       }
     }
   })
@@ -892,23 +906,23 @@ function submitRegister() {
   overflow: hidden;
   pointer-events: none;
   z-index: 1;
-  font-size: clamp(14.5px, 1.2vw, 18.5px);
+  font-size: clamp(12px, 0.92vw, 14.5px);
 }
 
 .suffix-chip {
   position: absolute;
   left: 0;
   white-space: nowrap;
-  padding: 6px 16px;
+  padding: 5px 13px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #10466f;
+  background: #fff;
+  color: #0c3557;
   font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", "Hiragino Maru Gothic ProN",
   "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
   font-weight: 700;
-  letter-spacing: 0.01em;
-  border: 1px solid rgba(41, 128, 185, 0.18);
-  box-shadow: 0 3px 12px rgba(21, 62, 102, 0.2);
+  letter-spacing: 0.015em;
+  border: 1px solid rgba(12, 53, 87, 0.16);
+  box-shadow: 0 1px 3px rgba(12, 53, 87, 0.22);
   animation-timing-function: linear;
   animation-iteration-count: infinite;
   will-change: transform;
@@ -967,13 +981,40 @@ function submitRegister() {
 .suffix-chip.rate-c { animation-name: driftSuffixC; }
 .suffix-chip.rate-d { animation-name: driftSuffixD; }
 
+.domain-count {
+  position: fixed;
+  left: 18px;
+  bottom: 16px;
+  z-index: 11;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: #fff;
+  color: #0c3557;
+  font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", "Hiragino Maru Gothic ProN",
+  "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid rgba(12, 53, 87, 0.16);
+  box-shadow: 0 1px 3px rgba(12, 53, 87, 0.22);
+  pointer-events: none;
+  user-select: none;
+}
+
 @media (max-width: 767px) {
   .suffix-drift {
-    font-size: 13.5px;
+    font-size: 11.5px;
   }
 
   .suffix-chip {
-    padding: 4px 11px;
+    padding: 4px 10px;
+  }
+
+  .domain-count {
+    left: 12px;
+    bottom: 12px;
+    font-size: 11px;
   }
 }
 
@@ -982,6 +1023,7 @@ function submitRegister() {
     display: none;
   }
 }
+
 
 @keyframes animateCloud {
   0% {

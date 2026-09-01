@@ -122,6 +122,7 @@ const en = {
     bounced: 'Bounced',
     attachments: 'Attachments',
     attCount: 'Total {total}',
+    domainCount: '{total} mail domains',
     emailCount: 'Total {total}',
     error404: '404 Not Found',
     home: 'Home',
