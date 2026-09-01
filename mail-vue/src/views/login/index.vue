@@ -234,7 +234,6 @@ const domainList = settingStore.domainList;
 // 只影响"谁在哪条轨道、整体从什么时刻开始"，不影响轨道内的等间隔，
 // 因此不重叠的保证依然成立。
 const driftSeed = Math.floor(Math.random() * 233280)
-const driftShift = Math.random()
 
 const domainTotal = computed(() => (settingStore.domainList || []).length)
 
@@ -277,11 +276,40 @@ const suffixDrifts = computed(() => {
   // 轨道内等间隔的保证会失效。0.78~1.35 对应横穿屏幕约 16~27 秒，
   // 与云的节奏同一区间，不会过快或过慢。
   const laneSpeed = Array.from({length: lanes}, () => 0.78 + rand() * 0.57)
+  // 每条轨道一个独立随机相位。这里不能用"轨道序号乘以某个常数"：
+  // 那样相邻轨道之间是固定增量，刚进页面时后缀会连成一条等差斜线
+  // （例如 0.618 与轨道内间隔 1/5 求余只差 0.018，斜得非常整齐）。
+  // 纯随机虽然不会等差，但偶尔仍会凑出斜着的一串，所以这里再筛一道：
+  // 算出进入页面那一刻每条轨道最靠左后缀的横向位置，与轨道序号求相关性，
+  // 太像一条直线就重摇，直到画面足够散。
+  const leadSlope = (offs) => {
+    const pts = []
+    for (let l = 0; l < lanes; l++) {
+      const n = members[l].length
+      let first = Infinity
+      for (let k = 0; k < n; k++) {
+        const ph = (k / n + offs[l]) % 1
+        if (ph <= rate.ratio && ph < first) first = ph
+      }
+      if (first < Infinity) pts.push([l, first])
+    }
+    if (pts.length < 3) return 0
+    const n = pts.length
+    const mx = pts.reduce((a, p) => a + p[0], 0) / n
+    const my = pts.reduce((a, p) => a + p[1], 0) / n
+    let num = 0, dx = 0, dy = 0
+    for (const [a, b] of pts) { num += (a - mx) * (b - my); dx += (a - mx) ** 2; dy += (b - my) ** 2 }
+    return dx && dy ? Math.abs(num / Math.sqrt(dx * dy)) : 0
+  }
+  let laneOffset = Array.from({length: lanes}, () => rand())
+  for (let tries = 0; tries < 40 && leadSlope(laneOffset) > 0.32; tries++) {
+    laneOffset = Array.from({length: lanes}, () => rand())
+  }
   const phase = new Array(total)
   members.forEach((group, lane) => {
     group.forEach((idx, k) => {
-      // 轨道内均分周期，再整条轨道按黄金比例偏移，避免各轨道同时入场
-      phase[idx] = ((k / group.length) + lane * 0.6180339887 + driftShift) % 1
+      // 轨道内均分周期，整条轨道再随机错开
+      phase[idx] = ((k / group.length) + laneOffset[lane]) % 1
     })
   })
   const TOP_FROM = 3, TOP_TO = 73   // 只在天空的蓝色区域飘，最底部渐变成白色会看不清
