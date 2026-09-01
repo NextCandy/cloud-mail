@@ -6,6 +6,14 @@
       <div class="x3 cloud"></div>
       <div class="x4 cloud"></div>
       <div class="x5 cloud"></div>
+      <div class="suffix-drift" aria-hidden="true">
+        <span
+            v-for="item in suffixDrifts"
+            :key="item.text"
+            :class="['suffix-chip', item.cls]"
+            :style="item.style"
+        >{{ item.text }}</span>
+      </div>
     </div>
     <div v-else :style="background"></div>
     <div class="form-wrapper">
@@ -219,6 +227,71 @@ const registerForm = reactive({
   code: null
 })
 const domainList = settingStore.domainList;
+
+// 邮箱后缀像云一样飘过：环境变量里配置多少个域名，这里就渲染多少个
+const suffixDrifts = computed(() => {
+  const list = settingStore.domainList || []
+  const total = list.length
+  if (!total) return []
+  // 按数量自适应轨道数，避免后缀在屏幕上堆成一团
+  const lanes = Math.min(11, Math.max(3, Math.ceil(total / 5)))
+  // 同屏数量 = 总数 x 过屏时间占比。占比写在 CSS 关键帧里，按总数分档选用，
+  // 这样后缀无论配 10 个还是 200 个，同屏都稳定在十来个
+  const RATES = [
+    {max: 24, cls: 'rate-a', ratio: 0.75},
+    {max: 60, cls: 'rate-b', ratio: 0.45},
+    {max: 120, cls: 'rate-c', ratio: 0.24},
+    {max: Infinity, cls: 'rate-d', ratio: 0.13}
+  ]
+  const rate = RATES.find(r => total <= r.max)
+  const CROSS = 20   // 每个后缀横穿屏幕约 20 秒，与云的节奏接近
+  const base = CROSS / rate.ratio
+  // 打乱"域名顺序"与"屏幕位置"的对应关系。若直接用下标决定轨道，
+  // 配置里相邻的域名会依次落在相邻轨道上，飘起来像一份斜着排列的列表。
+  // 用固定种子的洗牌，保证同一份域名列表每次刷新的布局都一致。
+  const seat = [...Array(total).keys()]
+  let seed = total * 9301 + 49297
+  for (let k = total - 1; k > 0; k--) {
+    seed = (seed * 9301 + 49297) % 233280
+    const j = Math.floor((seed / 233280) * (k + 1))
+    const t = seat[k]; seat[k] = seat[j]; seat[j] = t
+  }
+  // 同一条轨道上的后缀等间隔入场。域名长短差得很多
+  // （dog.do 约 86px，aiagentmails.com 约 172px），靠随机错开必然会撞上，
+  // 等间隔才能保证任意两个之间始终留着大半屏的距离。
+  const laneOf = i => seat[i] % lanes
+  const members = Array.from({length: lanes}, () => [])
+  for (let i = 0; i < total; i++) members[laneOf(i)].push(i)
+  const phase = new Array(total)
+  members.forEach((group, lane) => {
+    group.forEach((idx, k) => {
+      // 轨道内均分周期，再整条轨道按黄金比例偏移，避免各轨道同时入场
+      phase[idx] = ((k / group.length) + lane * 0.6180339887) % 1
+    })
+  })
+  const TOP_FROM = 3, TOP_TO = 73   // 只在天空的蓝色区域飘，最底部渐变成白色会看不清
+  const gap = lanes > 1 ? (TOP_TO - TOP_FROM) / (lanes - 1) : 0
+  const SIZE = [0.94, 1.02, 1.10]
+  const FADE = [0.88, 0.95, 1]
+  return list.map((text, i) => {
+    const lane = laneOf(i)        // 轨道由洗牌决定，与域名在配置里的次序无关
+    const depth = lane % 3
+    // 相邻轨道给出明显速度差，让它们持续相对错开，不会长时间并排飘
+    const duration = Math.round(base * (1 + ((lane * 7) % 5) * 0.08))
+    const delay = -phase[i] * duration
+    return {
+      text,
+      cls: rate.cls,
+      style: {
+        top: (TOP_FROM + lane * gap).toFixed(2) + '%',
+        animationDuration: duration + 's',
+        animationDelay: delay.toFixed(2) + 's',
+        fontSize: SIZE[depth] + 'em',
+        opacity: FADE[depth]
+      }
+    }
+  })
+})
 const registerLoading = ref(false)
 suffix.value = domainList[0]
 const verifyShow = ref(false)
@@ -810,6 +883,104 @@ function submitRegister() {
 #background-wrap {
   height: 100%;
   z-index: 0;
+  position: relative;
+}
+
+.suffix-drift {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+  font-size: clamp(14.5px, 1.2vw, 18.5px);
+}
+
+.suffix-chip {
+  position: absolute;
+  left: 0;
+  white-space: nowrap;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #10466f;
+  font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", "Hiragino Maru Gothic ProN",
+  "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(41, 128, 185, 0.18);
+  box-shadow: 0 3px 12px rgba(21, 62, 102, 0.2);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+@keyframes driftSuffixA {
+  0% {
+    transform: translateX(-200px);
+  }
+  75% {
+    transform: translateX(calc(100vw + 80px));
+  }
+  100% {
+    transform: translateX(calc(100vw + 80px));
+  }
+}
+
+@keyframes driftSuffixB {
+  0% {
+    transform: translateX(-200px);
+  }
+  45% {
+    transform: translateX(calc(100vw + 80px));
+  }
+  100% {
+    transform: translateX(calc(100vw + 80px));
+  }
+}
+
+@keyframes driftSuffixC {
+  0% {
+    transform: translateX(-200px);
+  }
+  24% {
+    transform: translateX(calc(100vw + 80px));
+  }
+  100% {
+    transform: translateX(calc(100vw + 80px));
+  }
+}
+
+@keyframes driftSuffixD {
+  0% {
+    transform: translateX(-200px);
+  }
+  13% {
+    transform: translateX(calc(100vw + 80px));
+  }
+  100% {
+    transform: translateX(calc(100vw + 80px));
+  }
+}
+
+.suffix-chip.rate-a { animation-name: driftSuffixA; }
+.suffix-chip.rate-b { animation-name: driftSuffixB; }
+.suffix-chip.rate-c { animation-name: driftSuffixC; }
+.suffix-chip.rate-d { animation-name: driftSuffixD; }
+
+@media (max-width: 767px) {
+  .suffix-drift {
+    font-size: 13.5px;
+  }
+
+  .suffix-chip {
+    padding: 4px 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suffix-drift {
+    display: none;
+  }
 }
 
 @keyframes animateCloud {
