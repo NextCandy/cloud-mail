@@ -1,17 +1,11 @@
 <template>
   <div id="login-box" :style=" background ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" element-loading-text="登录中...">
     <div id="background-wrap" v-if="!settingStore.settings.background">
-      <div v-for="(c, i) in clouds" :key="i" class="cloud-track" :style="c.track">
-        <div class="cloud-bob" :style="c.bob">
-          <div class="cloud" :style="c.shape" aria-hidden="true">
-            <svg class="cloud-svg" viewBox="0 0 350 140" aria-hidden="true" focusable="false">
-              <path class="cloud-silhouette" :d="c.path"></path>
-              <path class="cloud-belly" d="M8 91c23 12 52 14 84 10 38-5 76 0 115-1 38-1 74 2 108-4 9 8 3 20-13 27-38 8-72 2-99 7-46 4-91-1-126 2-22 1-39-3-46-8-16-2-24-14-23-33Z"></path>
-              <path class="cloud-highlight" d="M31 65c3-21 18-36 39-36 17 0 31 9 39 24 11-23 31-40 57-40 17 0 32 6 43 17-23-7-49-3-68 14-15 13-23 30-41 33-20 4-42-5-69-12Z"></path>
-            </svg>
-          </div>
-        </div>
-      </div>
+      <div class="x1 cloud"></div>
+      <div class="x2 cloud"></div>
+      <div class="x3 cloud"></div>
+      <div class="x4 cloud"></div>
+      <div class="x5 cloud"></div>
       <div class="suffix-drift far" aria-hidden="true">
         <span
             v-for="it in suffixFar"
@@ -254,89 +248,7 @@ const driftSeed = Math.floor(Math.random() * 233280)
 const NARROW = typeof window !== 'undefined'
   && window.matchMedia('(max-width: 767px)').matches
 
-// ── 统一的深度采样器：云与后缀共用 ────────────────────────────────
-// d ∈ [0,1]，0 = 最远（屏幕下方、地平线雾带），1 = 最近（屏幕上方、天顶）。
-// 大小 / 速度 / 雾色 / 模糊 / 起伏 / z 序全部由 d 派生。改造前这些量各自
-// 独立随机，等于把本该同源的属性各摇一次骰子，画面在物理上自相矛盾。
 const lerp = (a, b, t) => a + (b - a) * t
-const mixc = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)))
-const rgbs = (c) => `rgb(${c[0]},${c[1]},${c[2]})`   // 逗号语法，兼容老 WebView
-
-// 采样背景天空渐变（#login-box 的 linear-gradient），p = 纵向 0~1
-const SKY = [[0, [41, 128, 185]], [0.5, [109, 213, 250]], [1, [255, 255, 255]]]
-const skyAt = (p) => {
-  p = Math.min(1, Math.max(0, p))
-  const i = p < 0.5 ? 0 : 1
-  const [p0, c0] = SKY[i], [p1, c1] = SKY[i + 1]
-  return c0.map((v, k) => lerp(v, c1[k], (p - p0) / (p1 - p0)))
-}
-const haze = (d) => 0.68 * Math.pow(1 - d, 1.6)
-const hazeColor = (p, d) => mixc(skyAt(p), [244, 249, 251], 0.30 + 0.22 * (1 - d))
-// 雾交叉线 p=0.70：线以上天空比云暗（远云应更亮），线以下天空反而比云亮
-// （底部渐变到白），远云必须画得更暗更灰，否则会被白色地平线整个吞掉。
-const cloudBody = (p, d) =>
-  mixc(p < 0.70 ? [255, 255, 255] : [204, 220, 232], hazeColor(p, d), haze(d))
-const cloudBelly = (p, d) => {
-  const h = haze(d)
-  return mixc(cloudBody(p, d),
-    mixc([183, 206, 226], hazeColor(Math.min(1, p + 0.06), d), h), 0.62 * (1 - h))
-}
-const flat = (d) => 1 - 0.22 * Math.pow(1 - d, 1.1)   // 掠射角压扁：远处的云更扁，但仍保留云顶轮廓
-
-const CLOUD_PATHS = [
-  'M34 118C17 118 6 108 6 93C6 79 17 68 31 66C32 44 49 28 71 28C88 28 103 37 111 51C121 27 141 13 166 13C194 13 217 34 220 62C231 49 246 43 261 46C280 49 294 64 297 81C314 81 327 92 327 105C327 118 316 127 301 127C276 131 247 128 204 132C158 135 113 130 77 133C58 134 41 130 34 126C20 126 8 124 6 118Z',
-  'M29 118C14 118 4 107 4 92C4 77 16 66 33 64C35 48 47 36 62 31C77 26 91 30 101 41C110 21 128 10 149 10C176 10 197 29 201 55C211 44 226 39 241 43C259 47 271 61 273 77C290 76 304 84 310 96C316 108 309 120 296 125C267 132 230 128 203 131C164 135 116 130 78 133C56 134 38 130 29 126C15 126 6 124 4 118Z'
-]
-
-// ── 云：按深度分五层，层内用同一个 u 贯穿全部派生量 ────────────────
-const CLOUD_LAYERS = [
-  { d: 0.94, n: [1, 1], sx: [1.14, 1.30], top: [-7, 4], dur: [22, 26], soft: 0, sh: '0 12px 14px rgba(23,66,102,.22)', z: 94 },
-  { d: 0.78, n: [2, 1], sx: [0.80, 1.02], top: [4, 22], dur: [28, 34], soft: 0, sh: '0 8px 10px rgba(23,66,102,.15)', z: 78 },
-  { d: 0.52, n: [3, 2], sx: [0.50, 0.70], top: [22, 44], dur: [36, 44], soft: 0, sh: '', z: 46 },
-  { d: 0.26, n: [4, 2], sx: [0.30, 0.44], top: [42, 62], dur: [48, 58], soft: 0.6, sh: '', z: 24 },
-  { d: 0.08, n: [3, 1], sx: [0.17, 0.26], top: [60, 80], dur: [62, 76], soft: 1.1, sh: '', z: 10 }
-]
-
-const clouds = CLOUD_LAYERS.flatMap((L) =>
-  Array.from({ length: L.n[NARROW ? 1 : 0] }, () => {
-    const u = Math.random()                       // 同一个 u，绝不各摇一次
-    const d = Math.min(1, Math.max(0, L.d + (u - 0.5) * 0.06))
-    const sx = lerp(L.sx[0], L.sx[1], u)          // u↑ = 更近 = 更大
-    const top = lerp(L.top[1], L.top[0], u)       // u↑ = 更近 = 更靠上
-    const dur = lerp(L.dur[1], L.dur[0], u)       // u↑ = 更近 = 更快（视差方向）
-    const sy = sx * flat(d)
-    const p = Math.min(1, Math.max(0, top / 100 + 0.06))
-    // 起伏周期取 0.809 倍横移周期：每横穿一屏约起伏 1.24 次。
-    // 禁止取 1.0 或 0.5，那会与横移共振成固定的斜向直线运动。
-    const bobDur = dur * (0.809 + (Math.random() - 0.5) * 0.16)
-    const rest = Math.random()
-    return {
-      path: CLOUD_PATHS[Math.floor(Math.random() * CLOUD_PATHS.length)],
-      track: {
-        top: top.toFixed(2) + '%', zIndex: L.z,
-        '--s': sx.toFixed(3), '--sy': sy.toFixed(3),
-        animationDuration: dur.toFixed(1) + 's',
-        animationDelay: (-rest * dur).toFixed(1) + 's',
-        '--rest': `calc((100% + ${Math.round(350 * sx)}px) * ${rest.toFixed(4)})`
-      },
-      bob: {
-        opacity: (0.82 + 0.18 * d).toFixed(2),
-        // drop-shadow 必须挂在 bob 上：track 的子元素在动，父容器带 filter
-        // 会强制整棵子树逐帧重栅格；bob 的子元素静止，滤镜只栅格化一次。
-        filter: L.sh && !NARROW ? `drop-shadow(${L.sh})` : 'none',
-        '--bob': (3 + 9 * d).toFixed(1) + 'px',
-        animationDuration: bobDur.toFixed(1) + 's',
-        animationDelay: (-Math.random() * bobDur).toFixed(1) + 's'
-      },
-      shape: {
-        '--body': rgbs(cloudBody(p, d)),
-        '--belly': rgbs(cloudBelly(p, d)),
-        '--soft': (NARROW ? 0 : L.soft).toFixed(2) + 'px',
-        '--highlight': (0.16 + 0.16 * d).toFixed(2)
-      }
-    }
-  })
-)
 
 const domainTotal = computed(() => (settingStore.domainList || []).length)
 
@@ -1125,78 +1037,72 @@ function submitRegister() {
     rgba(238, 248, 253, .52) 100%);
 }
 
-/* ── 云：三层嵌套。track 管水平漂移，bob 管垂直起伏，cloud 管缩放与造型。
-   必须分三层：单个元素的 transform 会互相覆盖，而 animation-composition:add
-   在老 WebView 上不支持时会让第二条动画直接顶掉第一条 —— 云会完全停住。 ── */
-.cloud-track {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  height: 0;
-  animation-name: cloudDrift;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+@keyframes animateCloud {
+  0% {
+    margin-left: -500px;
+  }
+
+  100% {
+    margin-left: 100%;
+  }
 }
 
-@keyframes cloudDrift {
-  from { transform: translate3d(0, 0, 0); }
-  to   { transform: translate3d(calc(100% + 350px * var(--s)), 0, 0); }
+.x1 {
+  animation: animateCloud 30s linear infinite;
+  transform: scale(0.65);
 }
 
-.cloud-bob {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  animation-name: cloudBob;
-  animation-timing-function: cubic-bezier(.37, 0, .63, 1);
-  animation-iteration-count: infinite;
+.x2 {
+  animation: animateCloud 15s linear infinite;
+  transform: scale(0.3);
 }
 
-@keyframes cloudBob {
-  0%   { transform: translate3d(0, calc(var(--bob) * -1), 0); }
-  50%  { transform: translate3d(0, var(--bob), 0); }
-  100% { transform: translate3d(0, calc(var(--bob) * -1), 0); }
+.x3 {
+  animation: animateCloud 25s linear infinite;
+  transform: scale(0.5);
+}
+
+.x4 {
+  animation: animateCloud 13s linear infinite;
+  transform: scale(0.4);
+}
+
+.x5 {
+  animation: animateCloud 20s linear infinite;
+  transform: scale(0.55);
 }
 
 .cloud {
-  position: absolute;
-  left: 0;
-  top: 0;
+  background: linear-gradient(to bottom, #fff 5%, #f1f1f1 100%);
+  border-radius: 100px;
+  box-shadow: 0 8px 5px rgba(0, 0, 0, 0.1);
+  height: 120px;
   width: 350px;
-  height: 140px;
-  transform-origin: 0 50%;
-  /* scale 必须在 translateX 之前：写成 translateX(-100%) scale(s) 会在未缩放的
-     坐标系里位移 350px，小云被多藏 350×(1−s) px，重新引入入场死区。 */
-  transform: scale(var(--s), var(--sy)) translateX(-100%);
-  /* filter 在 transform 之前生效，所以模糊半径要预先除掉 scale，
-     否则 blur(1.1px) 配 scale(0.20) 在屏幕上只剩 0.22px。 */
-  filter: blur(calc(var(--soft, 0px) / var(--s)));
-  pointer-events: none;
+  position: relative;
 }
 
-/* 一条连续的 SVG 轮廓避免多个圆球叠成“煎饼”。底部腹部和左上高光
-   只负责表现体积，不改变云的整体轮廓。 */
-.cloud-svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
+.cloud:after,
+.cloud:before {
+  content: "";
+  position: absolute;
+  background: #fff;
+  z-index: -1;
 }
 
-.cloud-silhouette {
-  fill: var(--body);
+.cloud:after {
+  border-radius: 100px;
+  height: 100px;
+  left: 50px;
+  top: -50px;
+  width: 100px;
 }
 
-.cloud-belly {
-  fill: var(--belly);
-  opacity: .54;
-}
-
-.cloud-highlight {
-  fill: #fff;
-  opacity: var(--highlight, .26);
+.cloud:before {
+  border-radius: 200px;
+  height: 180px;
+  width: 180px;
+  right: 50px;
+  top: -90px;
 }
 
 /* ── 邮箱后缀 ── */
@@ -1287,9 +1193,8 @@ $rates: (a: .75, b: .60, c: .45, d: .34, e: .26, f: .18, g: .13, h: .09);
   user-select: none;
 }
 
-/* 移动端：登录卡占满宽度，可用天空只剩顶部一条窄带。轨道压到卡片上沿之上，
-   后缀减量到 16 个 / 4 条轨道，云减到 7 朵，并全局关掉 filter。
-   render / lanes / 轨道带这三个数是配套的，不能单独调其中一个。 */
+/* 移动端：登录卡占满宽度，可用天空只剩顶部一条窄带。后缀减量到
+   16 个 / 4 条轨道。render / lanes / 轨道带这三个数是配套的，不能单独调其中一个。 */
 @media (max-width: 767px) {
   .suffix-drift {
     font-size: clamp(11.5px, 3.2vw, 13px);
@@ -1303,19 +1208,12 @@ $rates: (a: .75, b: .60, c: .45, d: .34, e: .26, f: .18, g: .13, h: .09);
   }
 }
 
-/* reduced-motion 的语义是"去掉运动"，不是"去掉内容"。旧实现把 55 个后缀整层
-   抹掉、却把 16 朵大面积慢速平移的云一朵都没关 —— 而后者对前庭敏感用户的
-   刺激更强。改成冻结：静态构图恰好是动画的 t=0 帧，而防斜线的 leadSlope
-   逻辑已经保证那一帧是散开的。 */
+/* reduced-motion 的语义是"去掉运动"，不是"去掉内容"。后缀静态构图
+   恰好是动画的 t=0 帧，而防斜线的 leadSlope 逻辑已经保证那一帧是散开的。 */
 @media (prefers-reduced-motion: reduce) {
-  .cloud-track,
-  .cloud-bob,
   .chip-track {
     animation: none !important;
   }
-
-  .cloud-track { transform: translate3d(var(--rest), 0, 0); }
-  .cloud-bob   { transform: none; }
 
   .chip-track {
     transform: translate3d(var(--rest), 0, 0);
