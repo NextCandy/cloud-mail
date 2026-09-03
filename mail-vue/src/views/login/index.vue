@@ -3,7 +3,13 @@
     <div id="background-wrap" v-if="!settingStore.settings.background">
       <div v-for="(c, i) in clouds" :key="i" class="cloud-track" :style="c.track">
         <div class="cloud-bob" :style="c.bob">
-          <div class="cloud" :style="c.shape"></div>
+          <div class="cloud" :style="c.shape" aria-hidden="true">
+            <svg class="cloud-svg" viewBox="0 0 350 140" aria-hidden="true" focusable="false">
+              <path class="cloud-silhouette" :d="c.path"></path>
+              <path class="cloud-belly" d="M8 91c23 12 52 14 84 10 38-5 76 0 115-1 38-1 74 2 108-4 9 8 3 20-13 27-38 8-72 2-99 7-46 4-91-1-126 2-22 1-39-3-46-8-16-2-24-14-23-33Z"></path>
+              <path class="cloud-highlight" d="M31 65c3-21 18-36 39-36 17 0 31 9 39 24 11-23 31-40 57-40 17 0 32 6 43 17-23-7-49-3-68 14-15 13-23 30-41 33-20 4-42-5-69-12Z"></path>
+            </svg>
+          </div>
         </div>
       </div>
       <div class="suffix-drift far" aria-hidden="true">
@@ -275,7 +281,12 @@ const cloudBelly = (p, d) => {
   return mixc(cloudBody(p, d),
     mixc([183, 206, 226], hazeColor(Math.min(1, p + 0.06), d), h), 0.62 * (1 - h))
 }
-const flat = (d) => 1 - 0.40 * Math.pow(1 - d, 1.2)   // 掠射角压扁：远处的云更扁
+const flat = (d) => 1 - 0.22 * Math.pow(1 - d, 1.1)   // 掠射角压扁：远处的云更扁，但仍保留云顶轮廓
+
+const CLOUD_PATHS = [
+  'M34 118C17 118 6 108 6 93C6 79 17 68 31 66C32 44 49 28 71 28C88 28 103 37 111 51C121 27 141 13 166 13C194 13 217 34 220 62C231 49 246 43 261 46C280 49 294 64 297 81C314 81 327 92 327 105C327 118 316 127 301 127C276 131 247 128 204 132C158 135 113 130 77 133C58 134 41 130 34 126C20 126 8 124 6 118Z',
+  'M29 118C14 118 4 107 4 92C4 77 16 66 33 64C35 48 47 36 62 31C77 26 91 30 101 41C110 21 128 10 149 10C176 10 197 29 201 55C211 44 226 39 241 43C259 47 271 61 273 77C290 76 304 84 310 96C316 108 309 120 296 125C267 132 230 128 203 131C164 135 116 130 78 133C56 134 38 130 29 126C15 126 6 124 4 118Z'
+]
 
 // ── 云：按深度分五层，层内用同一个 u 贯穿全部派生量 ────────────────
 const CLOUD_LAYERS = [
@@ -298,9 +309,9 @@ const clouds = CLOUD_LAYERS.flatMap((L) =>
     // 起伏周期取 0.809 倍横移周期：每横穿一屏约起伏 1.24 次。
     // 禁止取 1.0 或 0.5，那会与横移共振成固定的斜向直线运动。
     const bobDur = dur * (0.809 + (Math.random() - 0.5) * 0.16)
-    const v = 1 - Math.pow(1 - d, 1.5)            // 近云高耸多变，远云低平雷同
     const rest = Math.random()
     return {
+      path: CLOUD_PATHS[Math.floor(Math.random() * CLOUD_PATHS.length)],
       track: {
         top: top.toFixed(2) + '%', zIndex: L.z,
         '--s': sx.toFixed(3), '--sy': sy.toFixed(3),
@@ -321,10 +332,7 @@ const clouds = CLOUD_LAYERS.flatMap((L) =>
         '--body': rgbs(cloudBody(p, d)),
         '--belly': rgbs(cloudBelly(p, d)),
         '--soft': (NARROW ? 0 : L.soft).toFixed(2) + 'px',
-        '--p1x': Math.round(55 + (Math.random() - .5) * 70 * v) + 'px',
-        '--p1s': Math.round(105 + (Math.random() - .5) * 40 * v) + 'px',
-        '--p2x': Math.round(55 + (Math.random() - .5) * 60 * v) + 'px',
-        '--p2s': Math.round(180 + (Math.random() - .5) * 50 * v) + 'px'
+        '--highlight': (0.16 + 0.16 * d).toFixed(2)
       }
     }
   })
@@ -1157,34 +1165,39 @@ function submitRegister() {
   left: 0;
   top: 0;
   width: 350px;
-  height: 120px;
+  height: 140px;
   transform-origin: 0 50%;
   /* scale 必须在 translateX 之前：写成 translateX(-100%) scale(s) 会在未缩放的
      坐标系里位移 350px，小云被多藏 350×(1−s) px，重新引入入场死区。 */
   transform: scale(var(--s), var(--sy)) translateX(-100%);
-  border-radius: 100px;
-  /* 178deg 而非 to bottom：全场统一一个略偏左上的光源方向 */
-  background: linear-gradient(178deg, #fff 0 18%, var(--body) 52%, var(--belly) 100%);
   /* filter 在 transform 之前生效，所以模糊半径要预先除掉 scale，
      否则 blur(1.1px) 配 scale(0.20) 在屏幕上只剩 0.22px。 */
   filter: blur(calc(var(--soft, 0px) / var(--s)));
   pointer-events: none;
 }
 
-/* 伪元素必须用 var(--body)/var(--belly) 而不是 #fff：否则远层的白色圆球会比
-   染过雾的云体更亮，直接把层次颠倒。渐变拉到 190% 是因为它们比云体高，
-   不拉伸会在接缝处出现明度断层。 */
-.cloud::after,
-.cloud::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  border-radius: 50%;
-  background: linear-gradient(178deg, var(--body) 0%, var(--belly) 190%);
+/* 一条连续的 SVG 轮廓避免多个圆球叠成“煎饼”。底部腹部和左上高光
+   只负责表现体积，不改变云的整体轮廓。 */
+.cloud-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.cloud::after  { left: var(--p1x);  width: var(--p1s); height: var(--p1s); top: calc(var(--p1s) / -2); }
-.cloud::before { right: var(--p2x); width: var(--p2s); height: var(--p2s); top: calc(var(--p2s) / -2); }
+.cloud-silhouette {
+  fill: var(--body);
+}
+
+.cloud-belly {
+  fill: var(--belly);
+  opacity: .54;
+}
+
+.cloud-highlight {
+  fill: #fff;
+  opacity: var(--highlight, .26);
+}
 
 /* ── 邮箱后缀 ── */
 .suffix-drift {
