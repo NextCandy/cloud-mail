@@ -1,14 +1,26 @@
 <template>
   <div id="login-box" :style=" background ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" element-loading-text="登录中...">
     <div id="background-wrap" v-if="!settingStore.settings.background">
-      <div v-for="(c, i) in clouds" :key="i" class="cloud" :style="c"></div>
-      <div class="suffix-drift" aria-hidden="true">
+      <div v-for="(c, i) in clouds" :key="i" class="cloud-track" :style="c.track">
+        <div class="cloud-bob" :style="c.bob">
+          <div class="cloud" :style="c.shape"></div>
+        </div>
+      </div>
+      <div class="suffix-drift far" aria-hidden="true">
         <span
-            v-for="item in suffixDrifts"
-            :key="item.text"
-            :class="['suffix-chip', item.cls]"
-            :style="item.style"
-        >{{ item.text }}</span>
+            v-for="it in suffixFar"
+            :key="it.key"
+            :class="['chip-track', it.cls, { 'drift-off': it.off }]"
+            :style="it.track"
+        ><span class="suffix-chip" :style="it.chip">{{ it.text }}</span></span>
+      </div>
+      <div class="suffix-drift near" aria-hidden="true">
+        <span
+            v-for="it in suffixNear"
+            :key="it.key"
+            :class="['chip-track', it.cls, { 'drift-off': it.off }]"
+            :style="it.track"
+        ><span class="suffix-chip" :style="it.chip">{{ it.text }}</span></span>
       </div>
     </div>
     <div v-else :style="background"></div>
@@ -158,7 +170,7 @@
 <script setup>
 import router from "@/router";
 import {useRoute} from "vue-router";
-import {computed, nextTick, reactive, ref} from "vue";
+import {computed, nextTick, reactive, ref, shallowRef, watch} from "vue";
 import {login} from "@/request/login.js";
 import {register} from "@/request/login.js";
 import {websiteConfig} from "@/request/setting.js";
@@ -233,69 +245,161 @@ const driftSeed = Math.floor(Math.random() * 233280)
 
 // 背景云。原本是 5 朵写死的 div，靠文档流上下排开，想加密就会往视口外堆，
 // 所以改成绝对定位后按参数生成：数量、大小、速度、高度都在这里调。
-const clouds = (() => {
-  const COUNT = 16
-  const BAND = 88 / COUNT          // 每朵云在自己这一层里随机取高度，避免挤成一堆
-  return Array.from({length: COUNT}, (_, i) => {
-    // 大小拉开到 7 倍极差，远近层次才明显；小的多、大的少，符合天上的样子
-    const scale = 0.16 + Math.pow(Math.random(), 1.5) * 1.04   // 0.16 ~ 1.20
-    const duration = 13 + Math.random() * 25      // 13 ~ 38 秒
+const NARROW = typeof window !== 'undefined'
+  && window.matchMedia('(max-width: 767px)').matches
+
+// ── 统一的深度采样器：云与后缀共用 ────────────────────────────────
+// d ∈ [0,1]，0 = 最远（屏幕下方、地平线雾带），1 = 最近（屏幕上方、天顶）。
+// 大小 / 速度 / 雾色 / 模糊 / 起伏 / z 序全部由 d 派生。改造前这些量各自
+// 独立随机，等于把本该同源的属性各摇一次骰子，画面在物理上自相矛盾。
+const lerp = (a, b, t) => a + (b - a) * t
+const mixc = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)))
+const rgbs = (c) => `rgb(${c[0]},${c[1]},${c[2]})`   // 逗号语法，兼容老 WebView
+
+// 采样背景天空渐变（#login-box 的 linear-gradient），p = 纵向 0~1
+const SKY = [[0, [41, 128, 185]], [0.5, [109, 213, 250]], [1, [255, 255, 255]]]
+const skyAt = (p) => {
+  p = Math.min(1, Math.max(0, p))
+  const i = p < 0.5 ? 0 : 1
+  const [p0, c0] = SKY[i], [p1, c1] = SKY[i + 1]
+  return c0.map((v, k) => lerp(v, c1[k], (p - p0) / (p1 - p0)))
+}
+const haze = (d) => 0.68 * Math.pow(1 - d, 1.6)
+const hazeColor = (p, d) => mixc(skyAt(p), [244, 249, 251], 0.30 + 0.22 * (1 - d))
+// 雾交叉线 p=0.70：线以上天空比云暗（远云应更亮），线以下天空反而比云亮
+// （底部渐变到白），远云必须画得更暗更灰，否则会被白色地平线整个吞掉。
+const cloudBody = (p, d) =>
+  mixc(p < 0.70 ? [255, 255, 255] : [204, 220, 232], hazeColor(p, d), haze(d))
+const cloudBelly = (p, d) => {
+  const h = haze(d)
+  return mixc(cloudBody(p, d),
+    mixc([183, 206, 226], hazeColor(Math.min(1, p + 0.06), d), h), 0.62 * (1 - h))
+}
+const flat = (d) => 1 - 0.40 * Math.pow(1 - d, 1.2)   // 掠射角压扁：远处的云更扁
+
+// ── 云：按深度分五层，层内用同一个 u 贯穿全部派生量 ────────────────
+const CLOUD_LAYERS = [
+  { d: 0.94, n: [1, 1], sx: [1.14, 1.30], top: [-7, 4], dur: [22, 26], soft: 0, sh: '0 12px 14px rgba(23,66,102,.22)', z: 94 },
+  { d: 0.78, n: [2, 1], sx: [0.80, 1.02], top: [4, 22], dur: [28, 34], soft: 0, sh: '0 8px 10px rgba(23,66,102,.15)', z: 78 },
+  { d: 0.52, n: [3, 2], sx: [0.50, 0.70], top: [22, 44], dur: [36, 44], soft: 0, sh: '', z: 46 },
+  { d: 0.26, n: [4, 2], sx: [0.30, 0.44], top: [42, 62], dur: [48, 58], soft: 0.6, sh: '', z: 24 },
+  { d: 0.08, n: [3, 1], sx: [0.17, 0.26], top: [60, 80], dur: [62, 76], soft: 1.1, sh: '', z: 10 }
+]
+
+const clouds = CLOUD_LAYERS.flatMap((L) =>
+  Array.from({ length: L.n[NARROW ? 1 : 0] }, () => {
+    const u = Math.random()                       // 同一个 u，绝不各摇一次
+    const d = Math.min(1, Math.max(0, L.d + (u - 0.5) * 0.06))
+    const sx = lerp(L.sx[0], L.sx[1], u)          // u↑ = 更近 = 更大
+    const top = lerp(L.top[1], L.top[0], u)       // u↑ = 更近 = 更靠上
+    const dur = lerp(L.dur[1], L.dur[0], u)       // u↑ = 更近 = 更快（视差方向）
+    const sy = sx * flat(d)
+    const p = Math.min(1, Math.max(0, top / 100 + 0.06))
+    // 起伏周期取 0.809 倍横移周期：每横穿一屏约起伏 1.24 次。
+    // 禁止取 1.0 或 0.5，那会与横移共振成固定的斜向直线运动。
+    const bobDur = dur * (0.809 + (Math.random() - 0.5) * 0.16)
+    const v = 1 - Math.pow(1 - d, 1.5)            // 近云高耸多变，远云低平雷同
+    const rest = Math.random()
     return {
-      top: (i * BAND + Math.random() * BAND).toFixed(2) + '%',
-      transform: `scale(${scale.toFixed(3)})`,
-      animationDuration: duration.toFixed(1) + 's',
-      animationDelay: (-Math.random() * duration).toFixed(1) + 's'
+      track: {
+        top: top.toFixed(2) + '%', zIndex: L.z,
+        '--s': sx.toFixed(3), '--sy': sy.toFixed(3),
+        animationDuration: dur.toFixed(1) + 's',
+        animationDelay: (-rest * dur).toFixed(1) + 's',
+        '--rest': `calc((100% + ${Math.round(350 * sx)}px) * ${rest.toFixed(4)})`
+      },
+      bob: {
+        opacity: (0.82 + 0.18 * d).toFixed(2),
+        // drop-shadow 必须挂在 bob 上：track 的子元素在动，父容器带 filter
+        // 会强制整棵子树逐帧重栅格；bob 的子元素静止，滤镜只栅格化一次。
+        filter: L.sh && !NARROW ? `drop-shadow(${L.sh})` : 'none',
+        '--bob': (3 + 9 * d).toFixed(1) + 'px',
+        animationDuration: bobDur.toFixed(1) + 's',
+        animationDelay: (-Math.random() * bobDur).toFixed(1) + 's'
+      },
+      shape: {
+        '--body': rgbs(cloudBody(p, d)),
+        '--belly': rgbs(cloudBelly(p, d)),
+        '--soft': (NARROW ? 0 : L.soft).toFixed(2) + 'px',
+        '--p1x': Math.round(55 + (Math.random() - .5) * 70 * v) + 'px',
+        '--p1s': Math.round(105 + (Math.random() - .5) * 40 * v) + 'px',
+        '--p2x': Math.round(55 + (Math.random() - .5) * 60 * v) + 'px',
+        '--p2s': Math.round(180 + (Math.random() - .5) * 50 * v) + 'px'
+      }
     }
   })
-})()
+)
 
 const domainTotal = computed(() => (settingStore.domainList || []).length)
 
-const suffixDrifts = computed(() => {
-  const list = settingStore.domainList || []
+// 过屏时间占比的阶梯。占比决定同屏数量（同屏 ≈ 总数 × 占比）；
+// 具体档位不再按总数查表，而是由几何反解得出，见下方 tier。
+const CHIP_LADDER = [
+  { cls: 'rate-a', ratio: 0.75 }, { cls: 'rate-b', ratio: 0.60 },
+  { cls: 'rate-c', ratio: 0.45 }, { cls: 'rate-d', ratio: 0.34 },
+  { cls: 'rate-e', ratio: 0.26 }, { cls: 'rate-f', ratio: 0.18 },
+  { cls: 'rate-g', ratio: 0.13 }, { cls: 'rate-h', ratio: 0.09 }
+]
+
+function buildDrifts(list) {
   const total = list.length
   if (!total) return []
-  // 按数量自适应轨道数，避免后缀在屏幕上堆成一团
-  const lanes = Math.min(11, Math.max(3, Math.ceil(total / 5)))
-  // 同屏数量 = 总数 x 过屏时间占比。占比写在 CSS 关键帧里，按总数分档选用，
-  // 这样后缀无论配 10 个还是 200 个，同屏都稳定在十来个
-  const RATES = [
-    {max: 24, cls: 'rate-a', ratio: 0.75},
-    {max: 60, cls: 'rate-b', ratio: 0.45},
-    {max: 120, cls: 'rate-c', ratio: 0.24},
-    {max: Infinity, cls: 'rate-d', ratio: 0.13}
-  ]
-  const rate = RATES.find(r => total <= r.max)
-  const CROSS = 20   // 每个后缀横穿屏幕约 20 秒，与云的节奏接近
-  const base = CROSS / rate.ratio
-  // 打乱"域名顺序"与"屏幕位置"的对应关系。若直接用下标决定轨道，
-  // 配置里相邻的域名会依次落在相邻轨道上，飘起来像一份斜着排列的列表。
   let rndState = driftSeed
   const rand = () => {
     rndState = (rndState * 9301 + 49297) % 233280
     return rndState / 233280
   }
-  const seat = [...Array(total).keys()]
-  for (let k = total - 1; k > 0; k--) {
+  // 移动端登录卡占满宽度，只有顶部一条窄带可用，必须减量
+  const render = NARROW ? Math.min(total, 16) : total
+  const lanes = NARROW
+    ? Math.min(4, Math.max(2, Math.ceil(render / 5)))
+    : Math.min(11, Math.max(3, Math.ceil(total / 5)))
+
+  // 先洗牌域名本身：配置里相邻的域名若依次落到相邻轨道，飘起来像一份斜排的列表
+  const pool = [...list]
+  for (let k = pool.length - 1; k > 0; k--) {
     const j = Math.floor(rand() * (k + 1))
-    const t = seat[k]; seat[k] = seat[j]; seat[j] = t
+    const t = pool[k]; pool[k] = pool[j]; pool[j] = t
   }
-  // 同一条轨道上的后缀等间隔入场。域名长短差得很多
-  // （dog.do 约 86px，aiagentmails.com 约 172px），靠随机错开必然会撞上，
-  // 等间隔才能保证任意两个之间始终留着大半屏的距离。
-  const laneOf = i => seat[i] % lanes
-  const members = Array.from({length: lanes}, () => [])
-  for (let i = 0; i < total; i++) members[laneOf(i)].push(i)
-  // 速度按轨道随机。同一条轨道必须同速——速度不同就会互相追赶，
-  // 轨道内等间隔的保证会失效。0.78~1.35 对应横穿屏幕约 16~27 秒，
-  // 与云的节奏同一区间，不会过快或过慢。
-  const laneSpeed = Array.from({length: lanes}, () => 0.78 + rand() * 0.57)
-  // 每条轨道一个独立随机相位。这里不能用"轨道序号乘以某个常数"：
-  // 那样相邻轨道之间是固定增量，刚进页面时后缀会连成一条等差斜线
-  // （例如 0.618 与轨道内间隔 1/5 求余只差 0.018，斜得非常整齐）。
-  // 纯随机虽然不会等差，但偶尔仍会凑出斜着的一串，所以这里再筛一道：
-  // 算出进入页面那一刻每条轨道最靠左后缀的横向位置，与轨道序号求相关性，
-  // 太像一条直线就重摇，直到画面足够散。
+  const items = pool.slice(0, render)
+
+  const members = Array.from({ length: lanes }, () => [])
+  for (let i = 0; i < render; i++) members[i % lanes].push(i)
+
+  // ── 深度挂在轨道上，而不是挂在单个胶囊上 ──
+  // 硬约束要求"同轨道同速"，即速度是轨道的属性；而视差要求速度与大小同向，
+  // 所以大小也必须是轨道的属性。一条轨道 = 一个景深平面。这样不重叠的保证
+  // 不但没被削弱，反而更强：同轨道内字号完全一致，胶囊宽度只剩文本长度一个变量。
+  const U = l => lanes > 1 ? 1 - l / (lanes - 1) : 0.6   // 轨道 0 在最上 = 最近
+  const laneSpeed = Array.from({ length: lanes }, (_, l) =>
+    1.34 - 0.52 * U(l) + (rand() - 0.5) * 0.05)          // lane 的纯函数 → 同轨道同速
+  const EM_LO = NARROW ? 0.94 : 0.84, EM_HI = NARROW ? 1.16 : 1.30
+  const laneEm = l => EM_LO + (EM_HI - EM_LO) * U(l)
+  const chipFill = (u) =>
+    `rgba(${Math.round(lerp(26, 9, u))},${Math.round(lerp(72, 42, u))},${Math.round(lerp(112, 72, u))},${(0.80 + 0.14 * u).toFixed(3)})`
+
+  // ── 档位几何反解：让"不重叠"由参数结构保证，而不是靠一次性扫描验证 ──
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1440
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+  const cardW = NARROW ? 0 : (vw <= 1024 ? 402 : 450)
+  const skyW = Math.max(240, vw - cardW)
+  const basePx = NARROW ? 12.5 : Math.min(15.5, Math.max(14, vw * 0.0102))
+  const maxChars = items.reduce((m, t) => Math.max(m, t.length), 1)   // 元素已含 @
+  // 0.55em/字 是这套圆体字栈的实测均宽；1.84em = padding .92×2 + 描边
+  const maxChipPx = (maxChars * 0.55 + 1.84) * basePx * EM_HI * 1.08
+  const travel = skyW + 280
+  const perLane = Math.ceil(render / lanes)
+  const safe = travel / (perLane * (maxChipPx + 48))     // 48px 最小净空
+  const dense = 15 / render                              // 同屏目标 15 个
+  const cap = Math.min(safe, dense)
+  const tier = CHIP_LADDER.find(r => r.ratio <= cap) || CHIP_LADDER[CHIP_LADDER.length - 1]
+  const CROSS = 20                                       // 横穿屏幕锁定约 20 秒
+  const base = CROSS / tier.ratio
+
+  // 每条轨道一个独立随机相位。不能用"轨道序号 × 常数"：那是固定增量，
+  // 进入页面时后缀会连成一条等差斜线。纯随机偶尔也会凑出斜的一串，
+  // 所以再筛一道：算出进场那一刻每条轨道最靠左后缀的横向位置，与轨道
+  // 序号求相关性，太像一条直线就重摇。
   const leadSlope = (offs) => {
     const pts = []
     for (let l = 0; l < lanes; l++) {
@@ -303,51 +407,87 @@ const suffixDrifts = computed(() => {
       let first = Infinity
       for (let k = 0; k < n; k++) {
         const ph = (k / n + offs[l]) % 1
-        if (ph <= rate.ratio && ph < first) first = ph
+        if (ph <= tier.ratio && ph < first) first = ph
       }
       if (first < Infinity) pts.push([l, first])
     }
     if (pts.length < 3) return 0
     const n = pts.length
-    const mx = pts.reduce((a, p) => a + p[0], 0) / n
-    const my = pts.reduce((a, p) => a + p[1], 0) / n
+    const mx = pts.reduce((a, q) => a + q[0], 0) / n
+    const my = pts.reduce((a, q) => a + q[1], 0) / n
     let num = 0, dx = 0, dy = 0
     for (const [a, b] of pts) { num += (a - mx) * (b - my); dx += (a - mx) ** 2; dy += (b - my) ** 2 }
     return dx && dy ? Math.abs(num / Math.sqrt(dx * dy)) : 0
   }
-  let laneOffset = Array.from({length: lanes}, () => rand())
+  let laneOffset = Array.from({ length: lanes }, () => rand())
   for (let tries = 0; tries < 40 && leadSlope(laneOffset) > 0.32; tries++) {
-    laneOffset = Array.from({length: lanes}, () => rand())
+    laneOffset = Array.from({ length: lanes }, () => rand())
   }
-  const phase = new Array(total)
+  const phase = new Array(render)
   members.forEach((group, lane) => {
     group.forEach((idx, k) => {
-      // 轨道内均分周期，整条轨道再随机错开
       phase[idx] = ((k / group.length) + laneOffset[lane]) % 1
     })
   })
-  const TOP_FROM = 3, TOP_TO = 73   // 只在天空的蓝色区域飘，最底部渐变成白色会看不清
+
+  // 轨道高度：恒定间距会读成表格行，加 ±25% 抖动打破。
+  // 这只影响纵向，与"同轨道横向等间隔"的不重叠保证互不相干。
+  const TOP_FROM = NARROW ? 2 : 4, TOP_TO = NARROW ? 14 : 68
   const gap = lanes > 1 ? (TOP_TO - TOP_FROM) / (lanes - 1) : 0
-  // 每个后缀单独随机大小；越大的看起来越近，透明度也越实
-  const sizeOf = list.map(() => 0.88 + rand() * 0.24)
-  return list.map((text, i) => {
-    const lane = laneOf(i)        // 轨道由洗牌决定，与域名在配置里的次序无关
-    const size = sizeOf[i]
+  const laneJit = Array.from({ length: lanes }, () => rand())
+  const tops = Array.from({ length: lanes }, (_, l) =>
+    TOP_FROM + l * gap + (laneJit[l] - 0.5) * gap * 0.50)
+
+  // 垂直起伏幅度由实际轨道间距反解；轨道密集时会自动算成 0（自动关闭）
+  let minGapPx = Infinity
+  for (let l = 1; l < lanes; l++)
+    minGapPx = Math.min(minGapPx, (tops[l] - tops[l - 1]) / 100 * vh)
+  const chipH = basePx * EM_HI * 1.45 + 2
+  const bobMax = lanes > 1
+    ? Math.min(6, Math.max(0, (minGapPx - chipH) / 2 - 4)) : 4
+
+  return items.map((text, i) => {
+    const lane = i % lanes
+    const u = U(lane)
     const duration = Math.round(base * laneSpeed[lane])
-    const delay = -phase[i] * duration
+    const dly = (-phase[i] * duration).toFixed(2) + 's'
+    // reduced-motion 下的静止位置：正好取动画的 t=0 帧
+    const pr = phase[i] / tier.ratio
     return {
-      text,
-      cls: rate.cls,
-      style: {
-        top: (TOP_FROM + lane * gap).toFixed(2) + '%',
+      key: `${text}#${i}`,
+      text,   // domainList 的元素后端已带 @ 前缀（setting-service 里加的）
+      cls: tier.cls,
+      near: lane < Math.ceil(lanes / 2),
+      off: pr > 1,
+      track: {
+        top: tops[lane].toFixed(2) + '%',
         animationDuration: duration + 's',
-        animationDelay: delay.toFixed(2) + 's',
-        fontSize: size.toFixed(3) + 'em',
-        opacity: (0.9 + (size - 0.88) / 0.24 * 0.1).toFixed(2)
+        animationDelay: dly,
+        '--op': (0.94 + 0.06 * u).toFixed(2),
+        '--rest': pr <= 1
+          ? `calc((var(--sky-w) + 280px) * ${pr.toFixed(4)} - 280px)` : '0px'
+      },
+      chip: {
+        fontSize: laneEm(lane).toFixed(3) + 'em',
+        '--fill': chipFill(u),
+        '--bd': `rgba(255,255,255,${(0.16 + 0.14 * u).toFixed(2)})`,
+        '--shA': (0.06 + 0.14 * u).toFixed(3),
+        '--bob': (bobMax * (0.5 + 0.5 * u)).toFixed(1) + 'px',
+        '--rot': (0.4 * u).toFixed(2) + 'deg'
       }
     }
   })
-})
+}
+
+// 用 shallowRef + watch 而不是 computed：domainList 是接口回来后才填充的，
+// computed 重算会改写全部 animationDuration/Delay，浏览器把这些动画全部重启，
+// 用户会在页面刚可交互那一刻看到整片后缀"啪"地跳回起始队形。
+const suffixDrifts = shallowRef([])
+watch(() => settingStore.domainList, (l) => {
+  if (l && l.length && !suffixDrifts.value.length) suffixDrifts.value = buildDrifts(l)
+}, { immediate: true })
+const suffixNear = computed(() => suffixDrifts.value.filter(x => x.near))
+const suffixFar = computed(() => suffixDrifts.value.filter(x => !x.near))
 const registerLoading = ref(false)
 suffix.value = domainList[0]
 const verifyShow = ref(false)
@@ -776,15 +916,16 @@ function submitRegister() {
 
 .container {
   background: v-bind(loginOpacity);
+  /* 让后缀的淡出读成有意为之，而不是"被切掉" */
+  box-shadow: -18px 0 40px -20px rgba(12, 53, 87, .18);
   padding-left: 40px;
   padding-right: 40px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  width: 450px;
+  width: var(--card-w);
   height: 100%;
   border-left: 1px solid var(--login-border);
-  box-shadow: var(--el-box-shadow-light);
   @media (max-width: 1024px) {
     padding: 20px 18px;
     width: 384px;
@@ -925,6 +1066,7 @@ function submitRegister() {
 
 
 #login-box {
+  --card-w: 450px;
   background: linear-gradient(to bottom, #2980b9, #6dd5fa, #fff);
   font: 100% Arial, sans-serif;
   height: 100%;
@@ -936,183 +1078,238 @@ function submitRegister() {
 }
 
 
+/* --card-w = 登录卡实际占用的横向宽度（含 margin），--sky-w 靠它算后缀终点。
+   窄屏下卡片不占满高度，天空仍是全宽，所以取 0。 */
+@media (max-width: 1024px) {
+  #login-box { --card-w: 402px; }
+}
+
+@media (max-width: 767px) {
+  #login-box { --card-w: 0px; }
+}
+
 #background-wrap {
   height: 100%;
   z-index: 0;
   position: relative;
+  /* #login-box 只写了 overflow-x:hidden。按规范一轴 hidden、另一轴 visible 时，
+     visible 会被计算成 auto —— 于是绝对定位的云在矮视口上能撑出一条纵向滚动条，
+     页面可被拖动、把居中的登录卡拖歪。装饰层自己关掉溢出，不动 #login-box
+     （后者里还有小屏注册态可能超过一屏的表单）。 */
+  overflow: hidden;
+  --sky-w: calc(100vw - var(--card-w, 450px));
 }
 
+/* 雾罩：把最远的三样东西（L0/L1 云、远后缀）统一压到同一层"空气"后面。
+   z-index 定在 38 而不是更高，near 侧全部保持锐利，边界干净。 */
+#background-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 38;
+  background: linear-gradient(to bottom,
+    rgba(238, 248, 253, 0) 0%,
+    rgba(238, 248, 253, 0) 45%,
+    rgba(238, 248, 253, .06) 62%,
+    rgba(238, 248, 253, .18) 76%,
+    rgba(238, 248, 253, .40) 90%,
+    rgba(238, 248, 253, .52) 100%);
+}
+
+/* ── 云：三层嵌套。track 管水平漂移，bob 管垂直起伏，cloud 管缩放与造型。
+   必须分三层：单个元素的 transform 会互相覆盖，而 animation-composition:add
+   在老 WebView 上不支持时会让第二条动画直接顶掉第一条 —— 云会完全停住。 ── */
+.cloud-track {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 0;
+  animation-name: cloudDrift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes cloudDrift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(calc(100% + 350px * var(--s)), 0, 0); }
+}
+
+.cloud-bob {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  animation-name: cloudBob;
+  animation-timing-function: cubic-bezier(.37, 0, .63, 1);
+  animation-iteration-count: infinite;
+}
+
+@keyframes cloudBob {
+  0%   { transform: translate3d(0, calc(var(--bob) * -1), 0); }
+  50%  { transform: translate3d(0, var(--bob), 0); }
+  100% { transform: translate3d(0, calc(var(--bob) * -1), 0); }
+}
+
+.cloud {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 350px;
+  height: 120px;
+  transform-origin: 0 50%;
+  /* scale 必须在 translateX 之前：写成 translateX(-100%) scale(s) 会在未缩放的
+     坐标系里位移 350px，小云被多藏 350×(1−s) px，重新引入入场死区。 */
+  transform: scale(var(--s), var(--sy)) translateX(-100%);
+  border-radius: 100px;
+  /* 178deg 而非 to bottom：全场统一一个略偏左上的光源方向 */
+  background: linear-gradient(178deg, #fff 0 18%, var(--body) 52%, var(--belly) 100%);
+  /* filter 在 transform 之前生效，所以模糊半径要预先除掉 scale，
+     否则 blur(1.1px) 配 scale(0.20) 在屏幕上只剩 0.22px。 */
+  filter: blur(calc(var(--soft, 0px) / var(--s)));
+  pointer-events: none;
+}
+
+/* 伪元素必须用 var(--body)/var(--belly) 而不是 #fff：否则远层的白色圆球会比
+   染过雾的云体更亮，直接把层次颠倒。渐变拉到 190% 是因为它们比云体高，
+   不拉伸会在接缝处出现明度断层。 */
+.cloud::after,
+.cloud::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  border-radius: 50%;
+  background: linear-gradient(178deg, var(--body) 0%, var(--belly) 190%);
+}
+
+.cloud::after  { left: var(--p1x);  width: var(--p1s); height: var(--p1s); top: calc(var(--p1s) / -2); }
+.cloud::before { right: var(--p2x); width: var(--p2s); height: var(--p2s); top: calc(var(--p2s) / -2); }
+
+/* ── 邮箱后缀 ── */
 .suffix-drift {
   position: absolute;
   inset: 0;
-  overflow: hidden;
   pointer-events: none;
-  z-index: 1;
-  font-size: clamp(12px, 0.92vw, 14.5px);
+  /* 基准字号必须抬上来，否则拉大轨道间极差后远端会跌破可读下限 */
+  font-size: clamp(14px, 1.02vw, 15.5px);
+}
+
+.suffix-drift.far  { z-index: 30; }
+.suffix-drift.near { z-index: 70; }
+
+.chip-track {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* 承约束：非线性缓动会让同轨道的后缀瞬时速度不同、间距在周期内出现最小值，
+     "等间隔 + 同速 ⇒ 永不重叠"的推导立刻失效。勿改。 */
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 
 .suffix-chip {
-  position: absolute;
-  left: 0;
+  display: inline-block;
   white-space: nowrap;
-  padding: 5px 13px;
-  border-radius: 999px;
-  background: #fff;
-  color: #0c3557;
+  /* 所有内部几何量都用 em：原来字号用 em 而 padding/box-shadow 写死 px，
+     等于在同一个盒子里塞不同大小的字，尺寸线索被自我抵消掉一半 ——
+     这才是"极差拉大了却感觉不明显"的真因。border 是唯一保留 px 的
+     （亚像素描边会整条消失）。 */
+  padding: .34em .92em;
+  border-radius: 99em;
+  border: 1px solid var(--bd);
+  background: var(--fill);
+  color: #fff;
+  text-shadow: 0 .5px 0 rgba(0, 0, 0, .10);
+  box-shadow: 0 .12em .30em rgba(6, 30, 52, var(--shA));
+  line-height: 1.45;
+  /* 全程 700 不递减：小字需要更多而不是更少的笔画重量 */
+  font-weight: 700;
+  letter-spacing: .02em;
   font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", "Hiragino Maru Gothic ProN",
   "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
-  font-weight: 700;
-  letter-spacing: 0.015em;
-  border: 1px solid rgba(12, 53, 87, 0.16);
-  box-shadow: 0 1px 3px rgba(12, 53, 87, 0.22);
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-  will-change: transform;
 }
 
-@keyframes driftSuffixA {
-  0% {
-    transform: translateX(-200px);
+/* 八档过屏占比。淡入淡出的百分比写成 ratio 的倍数：因为 base = CROSS/ratio
+   已把过屏时间锁死在 20 秒，所以各档的淡入淡出在屏幕上走过的距离和墙钟时长
+   完全一致（淡入 1.2s / 淡出 2.4s）。写成固定百分比会让最低档的胶囊在屏幕
+   正中间就开始淡出。
+   绝不能把 visibility 写进这组关键帧：Blink 对关键帧动画是整条判定能否上
+   合成器，加一行 visibility 会让 220 个胶囊从 120fps 掉到 48.6fps。
+   屏外驻留一律用 opacity:0。 */
+$rates: (a: .75, b: .60, c: .45, d: .34, e: .26, f: .18, g: .13, h: .09);
+
+@each $k, $r in $rates {
+  @keyframes driftSuffix-#{$k} {
+    0%                  { transform: translate3d(-280px, 0, 0); opacity: 0; }
+    #{$r * 6}%          { opacity: var(--op, .96); }
+    #{$r * 88}%         { opacity: var(--op, .96); }
+    #{$r * 100}%, 100%  { transform: translate3d(var(--sky-w), 0, 0); opacity: 0; }
   }
-  75% {
-    transform: translateX(calc(100vw + 80px));
-  }
-  100% {
-    transform: translateX(calc(100vw + 80px));
-  }
+  .chip-track.rate-#{$k} { animation-name: driftSuffix-#{$k}; }
 }
 
-@keyframes driftSuffixB {
-  0% {
-    transform: translateX(-200px);
-  }
-  45% {
-    transform: translateX(calc(100vw + 80px));
-  }
-  100% {
-    transform: translateX(calc(100vw + 80px));
-  }
-}
-
-@keyframes driftSuffixC {
-  0% {
-    transform: translateX(-200px);
-  }
-  24% {
-    transform: translateX(calc(100vw + 80px));
-  }
-  100% {
-    transform: translateX(calc(100vw + 80px));
-  }
-}
-
-@keyframes driftSuffixD {
-  0% {
-    transform: translateX(-200px);
-  }
-  13% {
-    transform: translateX(calc(100vw + 80px));
-  }
-  100% {
-    transform: translateX(calc(100vw + 80px));
-  }
-}
-
-.suffix-chip.rate-a { animation-name: driftSuffixA; }
-.suffix-chip.rate-b { animation-name: driftSuffixB; }
-.suffix-chip.rate-c { animation-name: driftSuffixC; }
-.suffix-chip.rate-d { animation-name: driftSuffixD; }
-
+/* 左下角后缀总数。原来它跟飘动的后缀用完全相同的配方（同背景/圆角/padding/
+   边框/阴影），会被读成"一个卡住不动的后缀"；而且它坐在 top≈98% 的纯白上，
+   只剩描边撑着约 1.10:1。改成墨底白字后 14.3:1，且明确"贴在玻璃上"。
+   z-index 从 11 降到 9，防止小屏上盖住 z-index:10 的登录卡。 */
 .domain-count {
   position: fixed;
-  left: 18px;
-  bottom: 16px;
-  z-index: 11;
-  padding: 5px 13px;
+  left: 20px;
+  bottom: 20px;
+  z-index: 9;
+  padding: 6px 14px;
   border-radius: 999px;
-  background: #fff;
-  color: #0c3557;
+  background: #0A2C4A;
+  color: #fff;
   font-family: ui-rounded, "SF Pro Rounded", "PingFang SC", "Hiragino Maru Gothic ProN",
   "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 700;
-  letter-spacing: 0.015em;
+  letter-spacing: .01em;
   font-variant-numeric: tabular-nums;
-  border: 1px solid rgba(12, 53, 87, 0.16);
-  box-shadow: 0 1px 3px rgba(12, 53, 87, 0.22);
+  border: 1px solid rgba(255, 255, 255, .22);
+  box-shadow: 0 2px 4px rgba(23, 66, 102, .12), 0 8px 20px -6px rgba(23, 66, 102, .22);
   pointer-events: none;
   user-select: none;
 }
 
+/* 移动端：登录卡占满宽度，可用天空只剩顶部一条窄带。轨道压到卡片上沿之上，
+   后缀减量到 16 个 / 4 条轨道，云减到 7 朵，并全局关掉 filter。
+   render / lanes / 轨道带这三个数是配套的，不能单独调其中一个。 */
 @media (max-width: 767px) {
   .suffix-drift {
-    font-size: 11.5px;
-  }
-
-  .suffix-chip {
-    padding: 4px 10px;
+    font-size: clamp(11.5px, 3.2vw, 13px);
   }
 
   .domain-count {
     left: 12px;
     bottom: 12px;
-    font-size: 11px;
+    font-size: 11.5px;
+    padding: 5px 12px;
   }
 }
 
+/* reduced-motion 的语义是"去掉运动"，不是"去掉内容"。旧实现把 55 个后缀整层
+   抹掉、却把 16 朵大面积慢速平移的云一朵都没关 —— 而后者对前庭敏感用户的
+   刺激更强。改成冻结：静态构图恰好是动画的 t=0 帧，而防斜线的 leadSlope
+   逻辑已经保证那一帧是散开的。 */
 @media (prefers-reduced-motion: reduce) {
-  .suffix-drift {
-    display: none;
-  }
-}
-
-
-@keyframes animateCloud {
-  0% {
-    margin-left: -500px;
+  .cloud-track,
+  .cloud-bob,
+  .chip-track {
+    animation: none !important;
   }
 
-  100% {
-    margin-left: 100%;
+  .cloud-track { transform: translate3d(var(--rest), 0, 0); }
+  .cloud-bob   { transform: none; }
+
+  .chip-track {
+    transform: translate3d(var(--rest), 0, 0);
+    opacity: var(--op, .96);
   }
-}
 
-.cloud {
-  background: linear-gradient(to bottom, #fff 5%, #f1f1f1 100%);
-  border-radius: 100px;
-  box-shadow: 0 8px 5px rgba(0, 0, 0, 0.1);
-  height: 120px;
-  width: 350px;
-  position: absolute;
-  left: 0;
-  transform-origin: left center;
-  animation-name: animateCloud;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-}
-
-.cloud:after,
-.cloud:before {
-  content: "";
-  position: absolute;
-  background: #fff;
-  z-index: -1;
-}
-
-.cloud:after {
-  border-radius: 100px;
-  height: 100px;
-  left: 50px;
-  top: -50px;
-  width: 100px;
-}
-
-.cloud:before {
-  border-radius: 200px;
-  height: 180px;
-  width: 180px;
-  right: 50px;
-  top: -90px;
+  .chip-track.drift-off { display: none; }
 }
 
 </style>
